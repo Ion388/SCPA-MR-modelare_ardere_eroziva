@@ -15,7 +15,9 @@
 
 from __future__ import annotations
 import math
+import numpy as np
 from typing import Dict, List, Tuple, Optional
+from grain_shape3 import area_perimeter_helper, make_double_anchor, area_shoelace, perimeter, make_star
 
 
 def Cstar(T1: float, k: float, Rgas: float) -> float:
@@ -50,13 +52,13 @@ def solve_exit_mach(area_ratio: float, k: float) -> float:
     return M
 
 
-def nozzle_perf(p1: float, At: float, A2: float, k: float, Rgas: float, T1: float, p_amb: float) -> Tuple[float, float, float]:
+def nozzle_perf(p1: float, At: float, eps: float, k: float, Rgas: float, T1: float, p_amb: float) -> Tuple[float, float, float]:
     """Compute thrust and exit conditions assuming isentropic nozzle with given Ae/At.
     Returns (F, mdot_noz, v_e). Pressure thrust uses actual exit pressure from isentropic flow; may over/under expand vs ambient.
     """
     cstar = Cstar(T1, k, Rgas)
     mdot = nozzle_mdot_from_p(p1, At, cstar)
-    eps = A2 / At
+    A2 = eps * At
     M2 = solve_exit_mach(max(1.0, eps), k)
     # print(f"Mach number {M2}")
     # Exit static conditions relative to chamber total
@@ -107,35 +109,34 @@ def alpha_er_from_properties(
 
 def simulate(params: Dict) -> Dict[str, List[float]]:
     # Unpack
-    L = params.get("L_grain", 0.20)  # m
-    R0 = params.get("R_port0", 0.010)  # m initial port radius
-    R_case = params.get("R_case", 0.040)  # m inner case radius (burnout when R>=R_case)
-    V_free = params.get("V_free", 1.0e-4)  # m^3 free volume not tied to port (voids, plenum)
+    L_case = params.get("L_case")  # m
+    R_case = params.get("R_case")  # m inner case radius (burnout when R>=R_case)
+    V_free = params.get("V_free")  # m^3 free volume not tied to port (voids, plenum)
 
-    At = params.get("A_t", 5.0e-5)  # m^2 throat
-    A2 = params.get("A_e", 2.5e-4)  # m^2 exit area
-    p_amb = params.get("p_amb", 101325.0)  # Pa
+    A2 = params.get("A2")  # m^2 throat
+    eps = params.get("eps")  # Area ratio Ae/At
+    p_amb = params.get("p_amb")  # Pa
 
-    rho_p = params.get("rho_p", 1750.0)  # kg/m^3
+    rho_p = params.get("rho_p")  # kg/m^3
     # Typical composite propellant: r ≈ 5 mm/s at ~10 MPa with n≈0.35
     # In SI with p in Pa => a ≈ 2e-5 m/s/Pa^n (order of magnitude)
-    a = params.get("a", 2.0e-5)  # m/s/Pa^n (with p in Pa)
-    n = params.get("n", 0.35)
+    a = params.get("a")  # m/s/Pa^n (with p in Pa)
+    n = params.get("n")
 
-    k = params.get("k", 1.20)
-    Rgas = params.get("Rgas", 330.0)  # J/kg-K
-    T1 = params.get("T1", 3200.0)  # K
+    k = params.get("k")
+    Rgas = params.get("Rgas")  # J/kg-K
+    T1 = params.get("T1")  # K
 
     # Erosive model parameters (Lenoir–Robillard):
     #   r = r0 + re,   re = alpha_er * G^0.8 * D^-0.2 * exp(-beta_er * rho_p * r / G)
     # Default alpha_er chosen to give modest increments for G~200 kg/m^2/s and D~0.02 m
-    alpha_er = params.get("alpha_er", 2.0e-4)
-    beta_er = params.get("beta_er", 53.0)
+    alpha_er = params.get("alpha_er")
+    beta_er = params.get("beta_er")
 
     # Integration
-    t_end = params.get("t_end", 4.0)  # s safeguard; true stop is web burnout
-    dt = params.get("dt", 0.0005)
-    p0 = params.get("p0", 1.1e6)  # Pa initial guess
+    t_end = params.get("t_end")  # s safeguard; true stop is web burnout
+    dt = params.get("dt")
+    p0 = params.get("p0")  # Pa initial guess
 
     # Pre-compute cstar
     cstar = Cstar(T1, k, Rgas)
@@ -143,43 +144,56 @@ def simulate(params: Dict) -> Dict[str, List[float]]:
     # State
     t = 0.0
     p = max(1.01 * p_amb, p0)
-    R = R0
 
     # Outputs
     T_list: List[float] = []
     P_list: List[float] = []
-    R_list: List[float] = []
-    R0_list: List[float] = []
-    Rtot_list: List[float] = []
+    V_list: List[float] = []
+    r0_list: List[float] = []
+    rtot_list: List[float] = []
     G_list: List[float] = []
     mdot_g_list: List[float] = []
     mdot_n_list: List[float] = []
     F_list: List[float] = []
 
     # Helper lambdas
-    def port_area(r: float) -> float:
-        return math.pi * r * r
+    def port_area(R: float) -> float:
+        return math.pi * R * R
 
-    def burn_area(r: float) -> float:
-        return 2.0 * math.pi * r * L
+    def burn_area(R: float) -> float:
+        return math.pi * R**2
 
-    def chamber_volume(r: float) -> float:
-        return V_free + math.pi * r * r * L
+    def chamber_volume(A: float, L: float) -> float:
+        return A * L
 
-    def hydraulic_diam(r: float) -> float:
+    def hydraulic_diam(R: float) -> float:
         # Circular port => Dh = 2R
-        return 2.0 * r
+        return 2.0 * R
+    
+    def throat_area(eps:float, A2: float) -> float:
+        return A2/eps
 
     # Integrate until burnout or t_end
     # while t <= t_end and R < (R_case - 1e-6):
-    while t <= t_end:
-        A_port = port_area(R)
-        S_burn = burn_area(R)
-        V = chamber_volume(R)
-        Dh = hydraulic_diam(R)
+    # Start values
 
-        print(f"Port area: {A_port:.6f} m^2, Burn area: {S_burn:.6f} m^2, Vol: {V:.6f} m^3")
-        print(f"hydraulic diam: {Dh:.6f} m, Throat area: {At:.6f} m^2")
+    pts = make_double_anchor()
+    # pts = make_star()
+    A_port = area_shoelace(pts)
+    P = perimeter(pts, R_max=R_case)
+    Dh = 4*A_port/P
+    S_burn = L_case*P
+    At = throat_area(eps, A2)
+    V = chamber_volume(A_port, L_case)
+
+    while t <= t_end:
+        # A_port = port_area(R)
+        # S_burn = burn_area(R)
+        # V = chamber_volume(R, L)
+        # Dh = hydraulic_diam(R)
+        # At = throat_area(eps, A2)
+
+        # print(f"Port area: {A_port:.6f} m^2, Burn area: {S_burn:.6f} m^2, Vol: {V:.6f} m^3")
 
         # Previous step nozzle flow as pass-through estimate for core G
         # First, compute nozzle mass flow and thrust from current p
@@ -187,11 +201,10 @@ def simulate(params: Dict) -> Dict[str, List[float]]:
 
         # Mass flux at port entrance (engineering shortcut)
         G = (mdot_noz / A_port) if A_port > 0.0 else 0.0
-        print(f"G={G:.1f} kg/m^2/s")
 
         # Burning rate: base + Lenoir–Robillard erosive addition
         r0 = a * (p ** n)
-        print(f"Base burn rate r0: {r0*1000:.3f} mm/s at p={p/1e6:.3f} MPa")
+        # print(f"Base burn rate r0: {r0*1000:.3f} mm/s at p={p/1e6:.3f} MPa, G={G:.1f} kg/m^2/s")
         if G > 1e-9 and Dh > 1e-9:
             # Fixed-point iterate r = r0 + alpha * G^0.8 * D^-0.2 * exp(-beta * rho_p * r / G)
             D_char = Dh  # For circular port, D = 4Ap/S = 2R = Dh
@@ -199,40 +212,50 @@ def simulate(params: Dict) -> Dict[str, List[float]]:
             r_iter = r0
             for _ in range(12):
                 expo = -beta_er * rho_p * r_iter / G
+                # print(f"expo: {expo:.3f}")
                 # Guard extreme negatives to avoid underflow
                 if expo < -60.0:
                     re = 0.0
                 else:
                     re = alpha_er * re_scale * math.exp(expo)
+                    # print(f"re: {re*1000:.3f} mm/s")
                 r_new = r0 + re
                 if abs(r_new - r_iter) <= 1e-6 * max(1e-4, r_new):
                     r_iter = r_new
                     break
                 r_iter = r_new
             r = max(0.0, r_iter)
+            # print(f"Erosive increment re: {r - r0:.3f} m/s, total r: {r:.3f} m/s")
         else:
             r = r0
+        # r = r0
 
         # Generation and nozzle outflow
         mdot_gen = rho_p * r * S_burn
         mdot_noz = nozzle_mdot_from_p(p, At, cstar)  # use c* for stability in ODE
 
+
         # Pressure ODE (0D)
         dVdt = S_burn * r
         dpdt = (Rgas * T1 / V) * (mdot_gen - mdot_noz) - (p / V) * dVdt
 
+        # print(f"mdot_gen: {mdot_gen:.3f} kg/s, mdot_noz: {mdot_noz:.3f} kg/s, dV/dt: {dVdt:.6f} m^3/s, dp/dt: {dpdt/1e6:.3f} MPa/s")
+
         # Advance (semi-implicit for geometry)
         p_new = p + dpdt * dt
         p = max(p_amb * 1.0001, p_new)
-        R = min(R_case, R + r * dt)
         t += dt
+
+        pts, A_port, P, Dh = area_perimeter_helper(pts, r, resample_N=3000, n_sub=200, R_max=R_case)
+        S_burn = L_case*P
+        V = chamber_volume(A_port, L_case)
 
         # Store
         T_list.append(t)
         P_list.append(p)
-        R_list.append(R)
-        R0_list.append(r0)
-        Rtot_list.append(r)
+        V_list.append(V)
+        r0_list.append(r0)
+        rtot_list.append(r)
         G_list.append(G)
         mdot_g_list.append(mdot_gen)
         mdot_n_list.append(mdot_noz)
@@ -245,18 +268,20 @@ def simulate(params: Dict) -> Dict[str, List[float]]:
         for i in range(1, len(T_list)):
             I_tot += 0.5 * (F_list[i] + F_list[i - 1]) * (T_list[i] - T_list[i - 1])
 
+    dists = np.hypot(pts[:,0], pts[:,1])
+
     return {
         "t": T_list,
         "p": P_list,
-        "R": R_list,
-        "r0": R0_list,
-        "r": Rtot_list,
+        "r0": r0_list,
+        "r": rtot_list,
+        "V": V_list,
         "G": G_list,
         "mdot_gen": mdot_g_list,
         "mdot_noz": mdot_n_list,
         "F": F_list,
         "I_tot": [I_tot],
-        "burnout": [1.0 if R >= (R_case - 1e-6) else 0.0],
+        "burnout": [1.0 if np.isclose(dists, R_case, atol=1e-6).all() else 0.0],
     }
 
 
@@ -270,17 +295,42 @@ def _try_plot(res: Dict[str, List[float]]) -> None:
     if not t:
         print("No data to plot.")
         return
-    fig, axs = plt.subplots(3, 1, figsize=(9, 8), sharex=True)
+    fig, axs = plt.subplots(5, 1, figsize=(9, 10), sharex=True)
     axs[0].plot(t, [x * 1e-6 for x in res["p"]])
     axs[0].set_ylabel("p [MPa]")
     axs[0].grid(True)
-    axs[1].plot(t, res["G"]) ; axs[1].set_ylabel("G [kg/m^2/s]") ; axs[1].grid(True)
+    axs[0].set_xlim(left=0.0)
+    axs[0].set_ylim(bottom=0.0)
+
+    axs[1].plot(t, res["G"])
+    axs[1].set_ylabel("G [kg/m^2/s]")
+    axs[1].grid(True)
+    axs[1].set_xlim(left=0.0)
+    axs[1].set_ylim(bottom=0.0)
+
     axs[2].plot(t, res["r0"], label="r0")
     axs[2].plot(t, res["r"], label="r total")
     axs[2].set_ylabel("r [m/s]")
     axs[2].set_xlabel("t [s]")
     axs[2].legend()
     axs[2].grid(True)
+    axs[2].set_xlim(left=0.0)
+    axs[2].set_ylim(bottom=0.0)
+
+    axs[3].plot(t, res["F"])
+    axs[3].set_ylabel("F [N]")
+    axs[3].set_xlabel("t [s]")
+    axs[3].grid(True)
+    axs[3].set_xlim(left=0.0)
+    axs[3].set_ylim(bottom=0.0)
+
+    axs[4].plot(t, res["V"])
+    axs[4].set_ylabel("V [m^3]")
+    axs[4].set_xlabel("t [s]")
+    axs[4].grid(True)
+    axs[4].set_xlim(left=0.0)
+    axs[4].set_ylim(bottom=0.0)
+
     plt.tight_layout()
     plt.show()
 
@@ -288,25 +338,40 @@ def _try_plot(res: Dict[str, List[float]]) -> None:
 def example_params() -> Dict:
     return {
         # Geometry
-        "L_grain": 0.20,
-        "R_port0": 0.010,
-        "R_case": 0.040,
-        "V_free": 2.0e-4,
+        "L_case": 8.71,  # m
+        "R_case": 1.45,
+        "V_free": 8.72,
         # Nozzle
-        "A_t": 7.5e-5,          # ~9.8 mm throat dia
-        "A_e": 3.0e-4,          # eps=4 (example)
-        "p_amb": 101325.0,
+        "A2": math.pi*1.85*1.85/4,
+        "eps": 16.0,
+        # "p_amb": 101325.0,
+        "p_amb": 0.0,
         # Propellant
-        "rho_p": 1750.0,
-        "a": 2.0e-5,
+        "rho_p": 1810.0,
+        "a": 2.5e-5,
         "n": 0.35,
+        # Combustion gas
+        "k": 1.14,
+        "Rgas": 280,
+        "T1": 3550.0,
         # Erosive (Lenoir–Robillard)
-        "alpha_er": 2.0e-4,     # or compute from properties using alpha_er_from_properties(...)
+        # "alpha_er": 2.0e-4,     # or compute from properties using alpha_er_from_properties(...)
+        "alpha_er": alpha_er_from_properties(
+            cp_gas=1600.0*0.239/1000,    # kJ/kg-K to kcal/kg-K
+            mu_gas=8e-5,
+            K=0.1,
+            cs_solid=1230.0*0.239/1000,  # kJ/kg-K to kcal/kg-K
+            rho_p=1810.0,
+            T1=3550.0,
+            Ts=350.0,
+            T2=2000.0,
+            Tp=300.0,
+        ),
         "beta_er": 53.0,
         # Integration
-        "t_end": 4.0,
-        "dt": 5.0e-3,
-        "p0": 1.2e6,
+        "t_end": 105,
+        "dt": 1e-1,
+        "p0": 9.5e6,
     }
 
 
@@ -326,6 +391,8 @@ def main() -> None:
     print(f"  Max thrust (ideal): {F_max:.1f} N")
     print(f"  Max mass flux G: {G_max:.1f} kg/m^2/s")
     print(f"  Total impulse: {I_tot:.1f} N·s")
+    print(f"  Specific impulse (ideal): {I_tot / (88365 * 9.81):.1f} s")
+    print(f"  Volume at burnout: {res['V'][-1]:.3f} m^3")
 
     _try_plot(res)
 
