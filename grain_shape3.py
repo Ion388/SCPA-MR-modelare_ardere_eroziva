@@ -8,6 +8,17 @@ from shapely.geometry import Polygon, MultiPolygon, GeometryCollection
 import sys
 import os
 
+path = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])))
+ar = 'auto'
+height = 16
+width = 9
+dpi = 100
+title_size = 28
+label_size = 28
+tick_size = 20
+legend_size = 28
+line_color = 'orangered'
+
 # ----------------- Utilities -----------------
 def make_star(R=0.46, eps=0.65, n=5, Npts=800):
     theta = np.linspace(0, 2*np.pi, Npts, endpoint=False)
@@ -20,17 +31,6 @@ def make_star(R=0.46, eps=0.65, n=5, Npts=800):
     x = pts[:, 0]
     y = pts[:, 1]
     n = len(pts)
-
-    path = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])))
-    ar = 'auto'
-    height = 16
-    width = 9
-    dpi = 100
-    title_size = 28
-    label_size = 28
-    tick_size = 20
-    legend_size = 28
-    line_color = 'orangered'
 
     fig, ax = plt.subplots(figsize=(11, 9), dpi=dpi)
     # connect points in order (closed)
@@ -383,17 +383,28 @@ def simulate_front_tracking(R=1.0, eps=0.9, n=6, Npts=400,
     pts = make_star()
     # pts = make_double_anchor()
 
-    fig, ax = plt.subplots(figsize=(6,6))
+    fig, ax = plt.subplots(figsize=(11, 9), dpi=dpi)
     # draw the initial polygon and the requested circle (radius 1.45 at origin)
     # ax.plot(pts[:, 0], pts[:, 1], '-k', lw=0.8, alpha=0.6)
     theta_circle = np.linspace(0, 2*np.pi, 400)
-    ax.plot(1.45 * np.cos(theta_circle), 1.45 * np.sin(theta_circle), 'r--', lw=1.5, label='radius 1.45')
-    line, = ax.plot([], [], lw=1.2)
-    circ, = ax.plot([], [], lw=0.6, ls='--')  # showing best-fit circle optionally
+    ax.plot(1.45 * np.cos(theta_circle), 1.45 * np.sin(theta_circle), 'r--', lw=4, label='radius 1.45')
+    line, = ax.plot([], [], lw=4)
+    # circ, = ax.plot([], [], lw=2, ls='--')  # showing best-fit circle optionally
     ax.set_aspect('equal', 'box')
     ax.set_xlim(-1.5, 1.5*R)
     ax.set_ylim(-1.5*R, 1.5*R)
+    
     ax.grid(True)
+    ax.set_ylabel("$y$", fontsize=label_size)
+    ax.set_xlabel("$x$", fontsize=label_size)
+    ax.tick_params(axis='both', which='major', labelsize=tick_size)
+    ax.grid(True)
+    # ax.set_xlim(left=0.0)
+    # ax.set_ylim(bottom=0.0)
+    ax.set_aspect(ar)
+    ax.axis('equal')
+    # ax.title('Point order along boundary (indices and arrows show sequence)')
+    plt.savefig(path + f"/star_shape.png")
 
     txtA = ax.text(0.02, 0.95, '', transform=ax.transAxes)
     txtP = ax.text(0.02, 0.90, '', transform=ax.transAxes)
@@ -402,14 +413,16 @@ def simulate_front_tracking(R=1.0, eps=0.9, n=6, Npts=400,
 
     def init():
         line.set_data([], [])
-        circ.set_data([], [])
+        # circ.set_data([], [])
         txtA.set_text('')
         txtP.set_text('')
         txtAP.set_text('')
         txtt.set_text('')
-        return line, circ, txtA, txtP, txtAP, txtt
-
+        return line, txtA, txtP, txtAP, txtt
+    i=0
     def update(frame):
+        nonlocal i
+        i+=1
         nonlocal pts
         # stability: take small internal steps
         n_sub = 200
@@ -438,28 +451,33 @@ def simulate_front_tracking(R=1.0, eps=0.9, n=6, Npts=400,
 
         A = area_shoelace(pts)
         P = perimeter(pts)
-        txtA.set_text(f"A = {A:.6f}")
-        txtP.set_text(f"P = {P:.6f}")
-        txtAP.set_text(f"A/P = {A/P:.6f}")
-        txtt.set_text(f"t = {frame * dt:.4f}")
+        # txtA.set_text(f"A = {A:.6f}")
+        # txtP.set_text(f"P = {P:.6f}")
+        # txtAP.set_text(f"A/P = {A/P:.6f}")
+        # txtt.set_text(f"t = {frame * dt:.4f}")
 
         # optional: show best-fit circle of same area
         Rfit = np.sqrt(A / np.pi)
         th = np.linspace(0, 2*np.pi, 200)
-        circ.set_data(Rfit * np.cos(th), Rfit * np.sin(th))
+        # circ.set_data(Rfit * np.cos(th), Rfit * np.sin(th))
+        # print(i)
 
-        return line, circ, txtA, txtP, txtAP, txtt
+        if i % 220 ==0 or i==1:
+            plt.savefig(path + f"/star_shape_evolution_{i//220:03d}.png")
+            plt.scatter(pts[:, 0], pts[:, 1], c='black', s=20, zorder=3)
+
+        return line, txtA, txtP, txtAP, txtt
     anim = FuncAnimation(fig, update, frames=range(steps+1), init_func=init,
                          blit=True, interval=show_interval, repeat=False)
-    # plt.show()
+    plt.show()
     return anim
 
-# if __name__ == "__main__":
-#     # Choose dt so that V0*dt is << average segment length (for stability)
-#     # Rough heuristic: avg segment ~ perimeter/Npts, so dt < 0.2*(perim/Npts)/V0
-#     simulate_front_tracking(R=1.0, eps=0.95, n=6, Npts=2000,
-#                             V0=0.02/3, dt=0.1, steps=1100, resample_N=2000,
-#                             show_interval=2)
+if __name__ == "__main__":
+    # Choose dt so that V0*dt is << average segment length (for stability)
+    # Rough heuristic: avg segment ~ perimeter/Npts, so dt < 0.2*(perim/Npts)/V0
+    simulate_front_tracking(R=1.0, eps=0.95, n=6, Npts=2000,
+                            V0=0.02/3, dt=0.1, steps=1100, resample_N=2000,
+                            show_interval=1)
     
 def area_perimeter_evolution(r=0.02/3, dt=0.1, steps=1100, resample_N=3000, n_sub=200):
     """
@@ -613,6 +631,6 @@ def area_perimeter_helper(pts, r=0.02/3, dt=0.1, resample_N=3000, n_sub=200, R_m
     return pts, A, P, D_h
 
 
-# run the area plot after the animation (or on its own)
-if __name__ == "__main__":
-    area_perimeter_evolution()
+# # run the area plot after the animation (or on its own)
+# if __name__ == "__main__":
+#     area_perimeter_evolution()
