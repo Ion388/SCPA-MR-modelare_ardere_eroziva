@@ -3,7 +3,6 @@
 # - Erosive increment (Lenoir–Robillard): r = r0 + α G^0.8 D^-0.2 exp(-β ρ_p r / G)
 # - Quasi-steady nozzle: m_dot_noz = p * At / Cstar(T0, gamma, R)
 # - Chamber pressure ODE: dp/dt = (R T0 / V)(m_dot_gen - m_dot_noz) - (p/V) dV/dt
-# - Geometry: cylindrical port in a grain of length L; S_burn = 2*pi*R*L, V = V_free + pi*R^2*L
 #
 # Notes:
 # - All units SI. Time in seconds, Pa, m, kg.
@@ -63,13 +62,8 @@ def nozzle_perf(p1: float, At: float, eps: float, k: float, Rgas: float, T1: flo
     mdot = nozzle_mdot_from_p(p1, At, cstar)
     A2 = eps * At
     M2 = solve_exit_mach(eps, k)
-    # print(f"Mach number {M2}")
-    # Exit static conditions relative to chamber total
     T2 = T1 / (1.0 + 0.5 * (k - 1.0) * M2 * M2)
     p2 = p1 * (T2 / T1) ** (k / (k - 1.0))
-    # p2 = p1 * 8.184e-3  # Precomputed for M2 and k=1.14
-    #compute t2 from p2
-    # T2 = T1 * (p2 / p1) ** ((k - 1.0) / k)
     a_2 = math.sqrt(k * Rgas * T2)
     v_e = M2 * a_2
     F = mdot * v_e + (p2 - p_amb) * A2
@@ -124,8 +118,6 @@ def simulate(params: Dict) -> Dict[str, List[float]]:
     p_amb = params.get("p_amb")  # Pa
 
     rho_p = params.get("rho_p")  # kg/m^3
-    # Typical composite propellant: r ≈ 5 mm/s at ~10 MPa with n≈0.35
-    # In SI with p in Pa => a ≈ 2e-5 m/s/Pa^n (order of magnitude)
     a = params.get("a")  # m/s/Pa^n (with p in Pa)
     n = params.get("n")
 
@@ -135,7 +127,6 @@ def simulate(params: Dict) -> Dict[str, List[float]]:
 
     # Erosive model parameters (Lenoir–Robillard):
     #   r = r0 + re,   re = alpha_er * G^0.8 * D^-0.2 * exp(-beta_er * rho_p * r / G)
-    # Default alpha_er chosen to give modest increments for G~200 kg/m^2/s and D~0.02 m
     alpha_er = params.get("alpha_er")
     beta_er = params.get("beta_er")
 
@@ -366,7 +357,6 @@ def _try_plot(res: Dict[str, List[float]]) -> None:
     ax.grid(True)
     ax.set_xlim(left=0.0)
     ax.set_ylim(bottom=0.0)
-    plt.tight_layout()
     ax.set_aspect(ar)
     plt.savefig(path + f"/G_star.png")
     plt.clf()

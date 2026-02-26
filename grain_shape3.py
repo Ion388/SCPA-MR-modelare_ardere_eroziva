@@ -454,12 +454,12 @@ def simulate_front_tracking(R=1.0, eps=0.9, n=6, Npts=400,
     # plt.show()
     return anim
 
-if __name__ == "__main__":
-    # Choose dt so that V0*dt is << average segment length (for stability)
-    # Rough heuristic: avg segment ~ perimeter/Npts, so dt < 0.2*(perim/Npts)/V0
-    simulate_front_tracking(R=1.0, eps=0.95, n=6, Npts=2000,
-                            V0=0.02/3, dt=0.1, steps=1100, resample_N=2000,
-                            show_interval=2)
+# if __name__ == "__main__":
+#     # Choose dt so that V0*dt is << average segment length (for stability)
+#     # Rough heuristic: avg segment ~ perimeter/Npts, so dt < 0.2*(perim/Npts)/V0
+#     simulate_front_tracking(R=1.0, eps=0.95, n=6, Npts=2000,
+#                             V0=0.02/3, dt=0.1, steps=1100, resample_N=2000,
+#                             show_interval=2)
     
 def area_perimeter_evolution(r=0.02/3, dt=0.1, steps=1100, resample_N=3000, n_sub=200):
     """
